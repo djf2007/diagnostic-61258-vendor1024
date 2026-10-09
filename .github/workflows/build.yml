@@ -533,7 +533,12 @@ jobs:
 
     - name: Initialize Config Fragment
       run: touch "${{ github.workspace }}/wild_gki.fragment"
-
+    - name: Diagnostic - restore vendor task size to 1024
+      if: inputs.version == 'android16-6.12' && inputs.sublevel == '58' && inputs.os_patch_level == '2025-12'
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX=1024
     - name: Apply Kernel Bypass Hack
       if: ${{ inputs.allow_version_mismatch == 'true' }}
       uses: ./.github/actions/bypass-kernel
