@@ -533,12 +533,49 @@ jobs:
 
     - name: Initialize Config Fragment
       run: touch "${{ github.workspace }}/wild_gki.fragment"
-    - name: Diagnostic - restore vendor task size to 1024
+    - name: Diagnostic - set four Kconfig values explicitly
       if: inputs.version == 'android16-6.12' && inputs.sublevel == '58' && inputs.os_patch_level == '2025-12'
-      uses: ./.github/actions/set-kernel-config
-      with:
-        config_list: |
-          CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX=1024
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        DEFCONFIG="arch/arm64/configs/gki_defconfig"
+        test -f "$DEFCONFIG"
+
+        python3 - <<'PY'
+        from pathlib import Path
+        import re
+
+        path = Path("arch/arm64/configs/gki_defconfig")
+        text = path.read_text()
+        settings = {
+            "CONFIG_ARM64_PSEUDO_NMI": "n",
+            "CONFIG_GKI_HIDDEN_MTK_CONFIGS": "n",
+            "CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX": "1024",
+            "CONFIG_MTK_TIMER": "n",
+        }
+
+        lines = text.splitlines()
+        for key, value in settings.items():
+            pattern = re.compile(r"^(?:# )?" + re.escape(key) + r"(?:=.*| is not set)$")
+            lines = [line for line in lines if not pattern.match(line)]
+            if value == "n":
+                lines.append(f"# {key} is not set")
+            else:
+                lines.append(f"{key}={value}")
+
+        path.write_text("\n".join(lines) + "\n")
+        print("Updated diagnostic gki_defconfig entries:")
+        for line in path.read_text().splitlines():
+            if any(line == f"# {key} is not set" or line.startswith(f"{key}=") for key in settings):
+                print(line)
+        PY
+
+        # Validate the source defconfig is exactly as intended.
+        grep -Fxq '# CONFIG_ARM64_PSEUDO_NMI is not set' "$DEFCONFIG"
+        grep -Fxq '# CONFIG_GKI_HIDDEN_MTK_CONFIGS is not set' "$DEFCONFIG"
+        grep -Fxq 'CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX=1024' "$DEFCONFIG"
+        grep -Fxq '# CONFIG_MTK_TIMER is not set' "$DEFCONFIG"
     - name: Apply Kernel Bypass Hack
       if: ${{ inputs.allow_version_mismatch == 'true' }}
       uses: ./.github/actions/bypass-kernel
@@ -561,6 +598,43 @@ jobs:
       uses: ./.github/actions/cache-stats
       with:
         clear_stats: false
+
+    - name: Verify final diagnostic Kconfig values
+      if: inputs.version == 'android16-6.12' && inputs.sublevel == '58' && inputs.os_patch_level == '2025-12'
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+        CONFIG_FILE=""
+        for candidate in \
+          bazel-bin/common/kernel_aarch64_config/out_dir/.config \
+          /home/runner/out/.config; do
+          if [ -f "$candidate" ]; then CONFIG_FILE="$candidate"; break; fi
+        done
+        if [ -z "$CONFIG_FILE" ]; then
+          CONFIG_FILE="$(find bazel-bin/common /home/runner/out -maxdepth 5 -name .config -type f 2>/dev/null | head -n1 || true)"
+        fi
+        if [ -z "$CONFIG_FILE" ]; then
+          echo "ERROR: could not find the final generated .config; refusing to certify diagnostic settings." >&2
+          exit 1
+        fi
+
+        echo "Checking actual generated kernel config: $CONFIG_FILE"
+        expected=(
+          '# CONFIG_ARM64_PSEUDO_NMI is not set'
+          '# CONFIG_GKI_HIDDEN_MTK_CONFIGS is not set'
+          'CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX=1024'
+          '# CONFIG_MTK_TIMER is not set'
+        )
+        for entry in "${expected[@]}"; do
+          if ! grep -Fxq "$entry" "$CONFIG_FILE"; then
+            echo "ERROR: expected effective config entry missing: $entry" >&2
+            grep -E '^(# )?CONFIG_(ARM64_PSEUDO_NMI|GKI_HIDDEN_MTK_CONFIGS|GKI_TASK_STRUCT_VENDOR_SIZE_MAX|MTK_TIMER)(=| is not set)' "$CONFIG_FILE" >&2 || true
+            exit 1
+          fi
+        done
+        grep -E '^(# )?CONFIG_(ARM64_PSEUDO_NMI|GKI_HIDDEN_MTK_CONFIGS|GKI_TASK_STRUCT_VENDOR_SIZE_MAX|MTK_TIMER)(=| is not set)' "$CONFIG_FILE"
+        echo "All four diagnostic Kconfig values verified in the generated .config."
 
     - name: Prune ccache before save
       if: always() && inputs.use_cache && (inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15')
