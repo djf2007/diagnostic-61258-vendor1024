@@ -50,11 +50,30 @@ runs:
         echo "SUSFS_COMMIT=$SUSFS_COMMIT" >> "$GITHUB_ENV"
         echo "Using SUSFS commit: $SUSFS_COMMIT"
 
-        # Pershoot's latest two gki-android14-6.1-dev commits (currently the
-        # no-features core build + Toolkit coexistence fixes) only apply to
-        # KernelSU-Next (dev-susfs fork). Other flavors use the simonpunk
-        # checkout as-is.
-        if [ "${{ inputs.root_flavor }}" = "next" ]; then
-          git fetch https://gitlab.com/pershoot/susfs4ksu.git gki-android14-6.1-dev || true
-          git log ..FETCH_HEAD --oneline -n 2 | awk '{print $1}' | tac | xargs git cherry-pick 2>/dev/null || true
+        # These two commits are from Pershoot's Android 14 / Linux 6.1 dev branch.
+        # Apply them only to matching KernelSU-Next builds. Cherry-picking them
+        # into Android 16 / Linux 6.12 edits a different patch base and caused an
+        # unresolved conflict that the old "|| true" silently left in the file.
+        if [ "${{ inputs.root_flavor }}" = "next" ] && [ "${{ inputs.version }}" = "android14-6.1" ]; then
+          git fetch https://gitlab.com/pershoot/susfs4ksu.git gki-android14-6.1-dev
+          mapfile -t PERSHOOT_COMMITS < <(git log --format=%H -n 2 --reverse HEAD..FETCH_HEAD)
+          for commit in "${PERSHOOT_COMMITS[@]}"; do
+            [ -n "$commit" ] || continue
+            if ! git cherry-pick "$commit"; then
+              git cherry-pick --abort || true
+              echo "ERROR: Failed to cherry-pick Pershoot SUSFS commit $commit; aborting instead of using a conflicted patch." >&2
+              exit 1
+            fi
+          done
+        fi
+
+        # Refuse to pass a conflicted/missing SUSFS patch to patch(1).
+        PATCH_FILE="kernel_patches/50_add_susfs_in_gki-${{ inputs.version }}.patch"
+        if [ ! -f "$PATCH_FILE" ]; then
+          echo "ERROR: expected SUSFS patch missing: $PATCH_FILE" >&2
+          exit 1
+        fi
+        if grep -nE '^(<<<<<<<|=======|>>>>>>>)' "$PATCH_FILE"; then
+          echo "ERROR: unresolved merge-conflict markers in $PATCH_FILE" >&2
+          exit 1
         fi
