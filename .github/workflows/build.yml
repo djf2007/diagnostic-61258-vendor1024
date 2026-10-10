@@ -533,7 +533,7 @@ jobs:
 
     - name: Initialize Config Fragment
       run: touch "${{ github.workspace }}/wild_gki.fragment"
-    - name: Diagnostic - set four Kconfig values explicitly
+    - name: Diagnostic - override PSEUDO_NMI and vendor task size
       if: inputs.version == 'android16-6.12' && inputs.sublevel == '58' && inputs.os_patch_level == '2025-12'
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
@@ -550,9 +550,7 @@ jobs:
         text = path.read_text()
         settings = {
             "CONFIG_ARM64_PSEUDO_NMI": "n",
-            "CONFIG_GKI_HIDDEN_MTK_CONFIGS": "n",
             "CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX": "1024",
-            "CONFIG_MTK_TIMER": "n",
         }
 
         lines = text.splitlines()
@@ -573,9 +571,7 @@ jobs:
 
         # Validate the source defconfig is exactly as intended.
         grep -Fxq '# CONFIG_ARM64_PSEUDO_NMI is not set' "$DEFCONFIG"
-        grep -Fxq '# CONFIG_GKI_HIDDEN_MTK_CONFIGS is not set' "$DEFCONFIG"
         grep -Fxq 'CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX=1024' "$DEFCONFIG"
-        grep -Fxq '# CONFIG_MTK_TIMER is not set' "$DEFCONFIG"
     - name: Apply Kernel Bypass Hack
       if: ${{ inputs.allow_version_mismatch == 'true' }}
       uses: ./.github/actions/bypass-kernel
@@ -622,9 +618,9 @@ jobs:
         echo "Checking actual generated kernel config: $CONFIG_FILE"
         expected=(
           '# CONFIG_ARM64_PSEUDO_NMI is not set'
-          '# CONFIG_GKI_HIDDEN_MTK_CONFIGS is not set'
+          'CONFIG_GKI_HIDDEN_MTK_CONFIGS=y'
           'CONFIG_GKI_TASK_STRUCT_VENDOR_SIZE_MAX=1024'
-          '# CONFIG_MTK_TIMER is not set'
+          'CONFIG_MTK_TIMER=y'
         )
         for entry in "${expected[@]}"; do
           if ! grep -Fxq "$entry" "$CONFIG_FILE"; then
@@ -634,7 +630,7 @@ jobs:
           fi
         done
         grep -E '^(# )?CONFIG_(ARM64_PSEUDO_NMI|GKI_HIDDEN_MTK_CONFIGS|GKI_TASK_STRUCT_VENDOR_SIZE_MAX|MTK_TIMER)(=| is not set)' "$CONFIG_FILE"
-        echo "All four diagnostic Kconfig values verified in the generated .config."
+        echo "All four expected Kconfig values verified in the generated .config."
 
     - name: Prune ccache before save
       if: always() && inputs.use_cache && (inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15')
